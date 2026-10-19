@@ -19,7 +19,7 @@ router = APIRouter(prefix="/item")
 
 @router.post("/", status_code=HTTPStatus.CREATED)
 async def post_item(info: ItemRequest, response: Response) -> ItemResponse:
-    entity = create_item(info.as_item_info())
+    entity = await create_item(info.as_item_info())
     response.headers["location"] = f"/item/{entity.id}"
     return ItemResponse.from_entity(entity)
 
@@ -32,7 +32,7 @@ async def get_item_list(
     max_price: Annotated[NonNegativeFloat | None, Query()] = None,
     show_deleted: Annotated[bool, Query()] = False,
 ) -> list[ItemResponse]:
-    items = get_items(
+    items = await get_items(
         offset=offset,
         limit=limit,
         min_price=min_price,
@@ -44,7 +44,7 @@ async def get_item_list(
 
 @router.get("/{item_id}")
 async def get_item_by_id(item_id: int) -> ItemResponse:
-    entity = get_item(item_id)
+    entity = await get_item(item_id)
     if entity is None:
         raise HTTPException(
             HTTPStatus.NOT_FOUND,
@@ -55,7 +55,7 @@ async def get_item_by_id(item_id: int) -> ItemResponse:
 
 @router.put("/{item_id}")
 async def put_item(item_id: int, info: ItemRequest) -> ItemResponse:
-    entity = update_item(item_id, info.as_item_info())
+    entity = await update_item(item_id, info.as_item_info())
     if entity is None:
         raise HTTPException(
             HTTPStatus.NOT_FOUND,
@@ -69,7 +69,7 @@ async def patch_item_by_id(
     item_id: int,
     info: PatchItemRequest,
 ) -> ItemResponse:
-    entity = patch_item(item_id, info.as_patch_item_info())
+    entity = await patch_item(item_id, info.as_patch_item_info())
     if entity is None:
         raise HTTPException(
             HTTPStatus.NOT_MODIFIED,
@@ -80,5 +80,5 @@ async def patch_item_by_id(
 
 @router.delete("/{item_id}")
 async def delete_item_by_id(item_id: int) -> Response:
-    delete_item(item_id)
+    await delete_item(item_id)
     return Response("")

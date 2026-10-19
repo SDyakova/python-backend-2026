@@ -1,3 +1,4 @@
+from .database import Base, engine, init_db
 from .models import (
     CartEntity,
     CartItemInfo,
@@ -20,13 +21,14 @@ from .queries import (
 )
 
 __all__ = [
-    # models
+    "Base",
+    "engine",
+    "init_db",
     "CartEntity",
     "CartItemInfo",
     "ItemEntity",
     "ItemInfo",
     "PatchItemInfo",
-    # queries
     "add_item_to_cart",
     "create_cart",
     "create_item",

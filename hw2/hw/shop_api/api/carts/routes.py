@@ -16,12 +16,12 @@ from .contracts import CartItemResponse, CartResponse
 router = APIRouter(prefix="/cart")
 
 
-def _to_cart_response(cart) -> CartResponse:
+async def _to_cart_response(cart) -> CartResponse:
     items_response: list[CartItemResponse] = []
     total_price = 0.0
 
     for cart_item in cart.items:
-        item = get_item_raw(cart_item.item_id)
+        item = await get_item_raw(cart_item.item_id)
         if item is None:
             continue
         items_response.append(
@@ -34,7 +34,7 @@ def _to_cart_response(cart) -> CartResponse:
 
 @router.post("/", status_code=HTTPStatus.CREATED)
 async def post_cart(response: Response) -> dict[str, int]:
-    entity = create_cart()
+    entity = await create_cart()
     response.headers["location"] = f"/cart/{entity.id}"
     return {"id": entity.id}
 
@@ -48,7 +48,7 @@ async def get_cart_list(
     min_quantity: Annotated[NonNegativeInt | None, Query()] = None,
     max_quantity: Annotated[NonNegativeInt | None, Query()] = None,
 ) -> list[CartResponse]:
-    carts = get_carts(
+    carts = await get_carts(
         offset=offset,
         limit=limit,
         min_price=min_price,
@@ -56,26 +56,26 @@ async def get_cart_list(
         min_quantity=min_quantity,
         max_quantity=max_quantity,
     )
-    return [_to_cart_response(c) for c in carts]
+    return [await _to_cart_response(c) for c in carts]
 
 
 @router.get("/{cart_id}")
 async def get_cart_by_id(cart_id: int) -> CartResponse:
-    cart = get_cart(cart_id)
+    cart = await get_cart(cart_id)
     if cart is None:
         raise HTTPException(
             HTTPStatus.NOT_FOUND,
             f"Cart {cart_id} not found",
         )
-    return _to_cart_response(cart)
+    return await _to_cart_response(cart)
 
 
 @router.post("/{cart_id}/add/{item_id}", status_code=HTTPStatus.CREATED)
 async def post_add_to_cart(cart_id: int, item_id: int) -> CartResponse:
-    cart = add_item_to_cart(cart_id, item_id)
+    cart = await add_item_to_cart(cart_id, item_id)
     if cart is None:
         raise HTTPException(
             HTTPStatus.NOT_FOUND,
             f"Cart {cart_id} or item {item_id} not found",
         )
-    return _to_cart_response(cart)
+    return await _to_cart_response(cart)

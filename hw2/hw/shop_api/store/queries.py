@@ -1,159 +1,224 @@
-from collections.abc import Iterable
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from .database import async_session_maker
 from .models import (
     CartEntity,
     CartItemInfo,
+    CartItemORM,
+    CartORM,
     ItemEntity,
     ItemInfo,
+    ItemORM,
     PatchItemInfo,
 )
 
-# ---------- «база данных» ----------
 
-_items: dict[int, ItemEntity] = {}
-_carts: dict[int, CartEntity] = {}
-
-_item_id_gen = iter(range(1, 10**9))
-_cart_id_gen = iter(range(1, 10**9))
-
-
-# ---------- items ----------
+async def create_item(info: ItemInfo) -> ItemEntity:
+    async with async_session_maker() as session:
+        orm = ItemORM(name=info.name, price=info.price)
+        session.add(orm)
+        await session.commit()
+        await session.refresh(orm)
+        return ItemEntity(id=orm.id, info=info, deleted=orm.deleted)
 
 
-def create_item(info: ItemInfo) -> ItemEntity:
-    item_id = next(_item_id_gen)
-    entity = ItemEntity(id=item_id, info=info)
-    _items[item_id] = entity
-    return entity
+async def get_item(item_id: int) -> ItemEntity | None:
+    async with async_session_maker() as session:
+        orm = await session.get(ItemORM, item_id)
+        if orm is None or orm.deleted:
+            return None
+        return ItemEntity(
+            id=orm.id,
+            info=ItemInfo(name=orm.name, price=orm.price),
+            deleted=orm.deleted,
+        )
 
 
-def get_item(item_id: int) -> ItemEntity | None:
-    """Вернуть товар, если он существует и не удалён."""
-    entity = _items.get(item_id)
-    if entity is None or entity.deleted:
-        return None
-    return entity
+async def get_item_raw(item_id: int) -> ItemEntity | None:
+    async with async_session_maker() as session:
+        orm = await session.get(ItemORM, item_id)
+        if orm is None:
+            return None
+        return ItemEntity(
+            id=orm.id,
+            info=ItemInfo(name=orm.name, price=orm.price),
+            deleted=orm.deleted,
+        )
 
 
-def get_item_raw(item_id: int) -> ItemEntity | None:
-    """Вернуть товар даже если он удалён (нужно для корзины)."""
-    return _items.get(item_id)
-
-
-def get_items(
+async def get_items(
     offset: int = 0,
     limit: int = 10,
     min_price: float | None = None,
     max_price: float | None = None,
     show_deleted: bool = False,
-) -> Iterable[ItemEntity]:
-    filtered: list[ItemEntity] = []
-    for entity in _items.values():
-        if entity.deleted and not show_deleted:
-            continue
-        if min_price is not None and entity.info.price < min_price:
-            continue
-        if max_price is not None and entity.info.price > max_price:
-            continue
-        filtered.append(entity)
-    return filtered[offset : offset + limit]
+) -> list[ItemEntity]:
+    async with async_session_maker() as session:
+        stmt = select(ItemORM)
+        if not show_deleted:
+            stmt = stmt.where(ItemORM.deleted.is_(False))
+        if min_price is not None:
+            stmt = stmt.where(ItemORM.price >= min_price)
+        if max_price is not None:
+            stmt = stmt.where(ItemORM.price <= max_price)
+        stmt = stmt.offset(offset).limit(limit)
+        result = await session.execute(stmt)
+        return [
+            ItemEntity(
+                id=o.id, info=ItemInfo(name=o.name, price=o.price), deleted=o.deleted
+            )
+            for o in result.scalars().all()
+        ]
 
 
-def update_item(item_id: int, info: ItemInfo) -> ItemEntity | None:
-    """Полная замена товара (PUT). Не создаёт новый, если не существует."""
-    entity = _items.get(item_id)
-    if entity is None or entity.deleted:
-        return None
-    entity.info = info
-    return entity
+async def update_item(item_id: int, info: ItemInfo) -> ItemEntity | None:
+    async with async_session_maker() as session:
+        orm = await session.get(ItemORM, item_id)
+        if orm is None or orm.deleted:
+            return None
+        orm.name = info.name
+        orm.price = info.price
+        await session.commit()
+        await session.refresh(orm)
+        return ItemEntity(id=orm.id, info=info, deleted=orm.deleted)
 
 
-def patch_item(item_id: int, patch: PatchItemInfo) -> ItemEntity | None:
-    """Частичное обновление (PATCH). Меняет только не-None поля."""
-    entity = _items.get(item_id)
-    if entity is None or entity.deleted:
-        return None
-    if patch.name is not None:
-        entity.info.name = patch.name
-    if patch.price is not None:
-        entity.info.price = patch.price
-    return entity
+async def patch_item(item_id: int, patch: PatchItemInfo) -> ItemEntity | None:
+    async with async_session_maker() as session:
+        orm = await session.get(ItemORM, item_id)
+        if orm is None or orm.deleted:
+            return None
+        if patch.name is not None:
+            orm.name = patch.name
+        if patch.price is not None:
+            orm.price = patch.price
+        await session.commit()
+        await session.refresh(orm)
+        return ItemEntity(
+            id=orm.id,
+            info=ItemInfo(name=orm.name, price=orm.price),
+            deleted=orm.deleted,
+        )
 
 
-def delete_item(item_id: int) -> ItemEntity | None:
-    """Мягкое удаление: помечает товар как deleted, но не удаляет."""
-    entity = _items.get(item_id)
-    if entity is None:
-        return None
-    entity.deleted = True
-    return entity
+async def delete_item(item_id: int) -> ItemEntity | None:
+    async with async_session_maker() as session:
+        orm = await session.get(ItemORM, item_id)
+        if orm is None:
+            return None
+        orm.deleted = True
+        await session.commit()
+        return ItemEntity(
+            id=orm.id,
+            info=ItemInfo(name=orm.name, price=orm.price),
+            deleted=True,
+        )
 
 
-# ---------- carts ----------
+async def create_cart() -> CartEntity:
+    async with async_session_maker() as session:
+        cart = CartORM()
+        session.add(cart)
+        await session.commit()
+        await session.refresh(cart)
+        return CartEntity(id=cart.id, items=[])
 
 
-def create_cart() -> CartEntity:
-    cart_id = next(_cart_id_gen)
-    entity = CartEntity(id=cart_id)
-    _carts[cart_id] = entity
-    return entity
+async def get_cart(cart_id: int) -> CartEntity | None:
+    async with async_session_maker() as session:
+        stmt = (
+            select(CartORM)
+            .where(CartORM.id == cart_id)
+            .options(selectinload(CartORM.items))
+        )
+        result = await session.execute(stmt)
+        cart = result.scalar_one_or_none()
+        if cart is None:
+            return None
+        items = [
+            CartItemInfo(item_id=ci.item_id, quantity=ci.quantity)
+            for ci in cart.items
+        ]
+        return CartEntity(id=cart.id, items=items)
 
 
-def get_cart(cart_id: int) -> CartEntity | None:
-    return _carts.get(cart_id)
+async def _cart_total_price(session: AsyncSession, cart_id: int) -> float:
+    stmt = (
+        select(func.sum(ItemORM.price * CartItemORM.quantity))
+        .join(CartItemORM, CartItemORM.item_id == ItemORM.id)
+        .where(CartItemORM.cart_id == cart_id)
+    )
+    result = await session.execute(stmt)
+    return result.scalar() or 0.0
 
 
-def _cart_total_price(cart: CartEntity) -> float:
-    total = 0.0
-    for cart_item in cart.items:
-        item = _items.get(cart_item.item_id)
-        if item is None:
-            continue
-        total += item.info.price * cart_item.quantity
-    return total
+async def _cart_total_quantity(session: AsyncSession, cart_id: int) -> int:
+    stmt = select(func.sum(CartItemORM.quantity)).where(
+        CartItemORM.cart_id == cart_id
+    )
+    result = await session.execute(stmt)
+    return result.scalar() or 0
 
 
-def _cart_total_quantity(cart: CartEntity) -> int:
-    return sum(ci.quantity for ci in cart.items)
-
-
-def get_carts(
+async def get_carts(
     offset: int = 0,
     limit: int = 10,
     min_price: float | None = None,
     max_price: float | None = None,
     min_quantity: int | None = None,
     max_quantity: int | None = None,
-) -> Iterable[CartEntity]:
-    filtered: list[CartEntity] = []
-    for cart in _carts.values():
-        price = _cart_total_price(cart)
-        quantity = _cart_total_quantity(cart)
-        if min_price is not None and price < min_price:
-            continue
-        if max_price is not None and price > max_price:
-            continue
-        if min_quantity is not None and quantity < min_quantity:
-            continue
-        if max_quantity is not None and quantity > max_quantity:
-            continue
-        filtered.append(cart)
-    return filtered[offset : offset + limit]
+) -> list[CartEntity]:
+    async with async_session_maker() as session:
+        stmt = select(CartORM).options(selectinload(CartORM.items))
+        result = await session.execute(stmt)
+        carts = result.scalars().all()
+
+        filtered: list[CartEntity] = []
+        for cart in carts:
+            price = await _cart_total_price(session, cart.id)
+            quantity = await _cart_total_quantity(session, cart.id)
+            if min_price is not None and price < min_price:
+                continue
+            if max_price is not None and price > max_price:
+                continue
+            if min_quantity is not None and quantity < min_quantity:
+                continue
+            if max_quantity is not None and quantity > max_quantity:
+                continue
+            items = [
+                CartItemInfo(item_id=ci.item_id, quantity=ci.quantity)
+                for ci in cart.items
+            ]
+            filtered.append(CartEntity(id=cart.id, items=items))
+
+        return filtered[offset : offset + limit]
 
 
-def add_item_to_cart(cart_id: int, item_id: int) -> CartEntity | None:
-    """Добавить товар в корзину. Если уже есть — увеличить quantity."""
-    cart = _carts.get(cart_id)
-    if cart is None:
-        return None
-    item = _items.get(item_id)
-    if item is None or item.deleted:
-        return None
+async def add_item_to_cart(cart_id: int, item_id: int) -> CartEntity | None:
+    async with async_session_maker() as session:
+        cart = await session.get(CartORM, cart_id)
+        if cart is None:
+            return None
+        item = await session.get(ItemORM, item_id)
+        if item is None or item.deleted:
+            return None
 
-    for cart_item in cart.items:
-        if cart_item.item_id == item_id:
+        stmt = select(CartItemORM).where(
+            CartItemORM.cart_id == cart_id,
+            CartItemORM.item_id == item_id,
+        )
+        result = await session.execute(stmt)
+        cart_item = result.scalar_one_or_none()
+
+        if cart_item is not None:
             cart_item.quantity += 1
-            return cart
+        else:
+            session.add(
+                CartItemORM(cart_id=cart_id, item_id=item_id, quantity=1)
+            )
 
-    cart.items.append(CartItemInfo(item_id=item_id, quantity=1))
-    return cart
+        await session.commit()
+
+    return await get_cart(cart_id)
